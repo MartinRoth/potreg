@@ -12,6 +12,8 @@ vignette: >
 ```{r, fig.show='hold'}
 library(data.table)
 library(ggplot2)
+library(foreach)
+library(iterators)
 admNL <- raster::getData('GADM', country='NL', path="../inst/extdata", level=0)
 fadmNL <- fortify(admNL)
 if(!file.exists("../inst/extdata/NL_eobs_rr_0.50.rds")) {
@@ -35,6 +37,59 @@ ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
   scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
 ```
 
+### Decluster the data
+```{r, fig.show='hold'}
+if(!file.exists("../inst/extdata/NL_eobs_rrSep_0.50.rds")) {
+  julianDays <- as.numeric(data[pointID == 1, julian(time, origin=as.Date("1950-01-01"))])
+  declusterData <- function(x) {
+    index <- evanHelpers::declusterSimpleSeparation(julianDays, x, sep=1)
+    x[-index] <- 0
+    return(x)
+  }
+  data[, rrSep := declusterData(rr), by = pointID]
+  saveRDS(data, file = "../inst/extdata/NL_eobs_rrSep_0.50.rds")
+} else {
+  data <- readRDS("../inst/extdata/NL_eobs_rrSep_0.50.rds")
+}
+knitr::kable(head(data))
+```
+
+### Compute the threshold
+```{r, fig.show='hold'}
+if(!file.exists("../inst/extdata/NL_eobs_threshold_0.50.rds")) {
+  data[, threshold := -1]
+  data[, pVal := -1]
+  setkey(data, pointID)
+  data <- foreach(x=unique(data[["pointID"]]), .combine="rbind", .inorder=FALSE) %do% {
+    fit <- data[.(x), quantreg::rq(rrSep ~ year, tau = 0.96)]
+    data[.(x), threshold := fit$fitted.values]
+    data[.(x), pVal := summary(fit)$coefficients[2, 4]]
+  }
+  saveRDS(data, file = "../inst/extdata/NL_eobs_threshold_0.50.rds")
+} else {
+  data <- readRDS("../inst/extdata/NL_eobs_threshold_0.50.rds")
+}
+knitr::kable(head(data))
+```
+
+```{r, fig.show='hold'}
+ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
+  geom_path() + coord_map() + 
+  geom_tile(aes(x = lon, y = lat, fill = mean, group = NULL), data = 
+              data[, .(mean = mean(threshold)), by = .(lat, lon)],
+            alpha = 0.5) + 
+  scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
+ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
+  geom_path() + coord_map() + 
+  geom_tile(aes(x = lon, y = lat, fill = trend, group = NULL),
+            data = data[, .(trend = diff(range(threshold))*10/diff(range(year))),
+                        by = .(lat, lon)],
+            alpha = 0.5) + 
+  geom_point(aes(x=lon, y = lat, group=NULL),
+             shape = 1,
+             data = data[, unique(pVal), by = .(lat, lon)][V1 < 0.05, ]) +
+  scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
+```
 
 - plot winter maxima
 - use declustering

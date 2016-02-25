@@ -23,10 +23,12 @@ if(!file.exists("../inst/extdata/NL_eobs_rr_0.50.rds")) {
   data <- readRDS("../inst/extdata/NL_eobs_rr_0.50.rds")
 }
 data <- data[month %in% c(1,2,12),]
+data <- data[ !(year == 1950 & month %in% c(1,2)), ]
+
 knitr::kable(head(data))
 ```
 
-```{r, fig.show='hold'}
+```{r, fig.show='hold', fig.cap="Mean winter maxima per grid box."}
 ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
   geom_path() + coord_map() + 
   geom_tile(aes(x = lon, y = lat, fill = mRR, group = NULL), data = 
@@ -60,7 +62,7 @@ if(!file.exists("../inst/extdata/NL_eobs_threshold_0.50.rds")) {
   data[, threshold := -1]
   data[, pVal := -1]
   setkey(data, pointID)
-  data <- foreach(x=unique(data[["pointID"]]), .combine="rbind", .inorder=FALSE) %do% {
+  foreach(x=unique(data[["pointID"]]), .inorder=FALSE) %do% {
     fit <- data[.(x), quantreg::rq(rrSep ~ year, tau = 0.96)]
     data[.(x), threshold := fit$fitted.values]
     data[.(x), pVal := summary(fit)$coefficients[2, 4]]
@@ -72,7 +74,7 @@ if(!file.exists("../inst/extdata/NL_eobs_threshold_0.50.rds")) {
 knitr::kable(head(data))
 ```
 
-```{r, fig.show='hold'}
+```{r, fig.show='hold', fig.cap="Threshold statistics."}
 ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
   geom_path() + coord_map() + 
   geom_tile(aes(x = lon, y = lat, fill = mean, group = NULL), data = 
@@ -91,9 +93,30 @@ ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
   scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
 ```
 
-- plot winter maxima
-- use declustering
-- reproduce figures 3 and 4
+### Set excesses
+
+```{r, fig.show='hold'}
+data[, pVal := NULL]
+data[, excess := rrSep - threshold]
+data[excess <= 0, excess := NA]
+knitr::kable(head(data))
+```
+
+We expect `r data[, length(unique(year)) - 1] * (1 - 0.96) * 90.25` exceedances per grid box. The actual sample size varies between `r min(data[!is.na(excess), .N, by = pointID][, N])` and `r max(data[!is.na(excess), .N, by = pointID][, N])` exceedances per grid box. In total we observe `r data[, any(!is.na(excess)), by = time][, length(which(V1))]` days with at least one exceedance.
+
+```{r, fig.show='hold'}
+poissonData <- data[pointID == 1, .(time, year, excess)]
+poissonData[, countExcesses := cumsum(!is.na(excess))]
+ggplot(poissonData, aes(x = year, y = countExcesses)) + geom_line()
+```
+
+- reproduce figures 2, 7, 8, 9, 10, 11
+- reproduce table 1 and 2
+
+Most computations are to be found in "Dropbox/Work/Rwork/Scriptfiles/0_computation.R"
+The corrections made after the review of the second paper are to be found in  "Dropbox/Work/Rwork/Scriptfiles/01_reviews.R"
+Go also carfully over the functions in "Dropbox/Work/Rwork/Scriptfiles/0_all_functions.R"
+
 
 
 Vignettes are long form documentation commonly included in packages. Because they are part of the distribution of the package, they need to be as compact as possible. The `html_vignette` output type provides a custom style sheet (and tweaks some options) to ensure that the resulting html is as small as possible. The `html_vignette` format:

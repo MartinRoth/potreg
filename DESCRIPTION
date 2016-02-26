@@ -1,9 +1,26 @@
 Package: potreg
 Type: Package
-Title: What the Package Does (Title Case)
-Version: 0.1.0
-Author: Who wrote it
-Maintainer: Who to complain to <yourfault@somewhere.net>
-Description: More about what it does (maybe more than one line)
-License: What license is it under?
+Title: Regional Peaks-Over-Threshold Analysis
+Version: 0.1.1
+Author: Martin Roth
+Maintainer: Martin Roth <roth@knmi.nl>
+Description: Implementation of the approach presented in Roth, M., T.A.
+    Buishand, G. Jongbloed, and J.H. van Zanten (2012), A regional non-stationary
+    peaks-over-threshold model in a nonstationary climate. Water Resources Research,
+    48, W11533.
+License: GPL (>= 2)
+Imports:
+    data.table,
+    zoo
 LazyData: TRUE
+RoxygenNote: 5.0.1
+Suggests: knitr,
+    rmarkdown,
+    foreach,
+    iterators,
+    ggplot2,
+    eobsR,
+    evanHelpers,
+    quantreg,
+    raster
+VignetteBuilder: knitr

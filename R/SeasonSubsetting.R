@@ -2,6 +2,7 @@
 #' @param dat data.table of the original data
 #' @param season String with the full season name
 #' @import data.table
+#' @importFrom zoo rollapply
 #' @export
 SubsetSeasons <- function(dat, season) {
   stopifnot(is.data.table(dat))
@@ -21,7 +22,7 @@ SubsetSeasons <- function(dat, season) {
 
   indexDat[, indicator := FALSE]
   indexDat[-c(.N, .N-1),
-           indicator := zoo::rollapply(indexDat[, month], 3, identical, season)]
+           indicator := rollapply(indexDat[, month], 3, identical, season)]
   indexDat[indicator==FALSE, indicator := NA]
   indexDat[, season := 0L]
   indexDat[indicator==TRUE, season := cumsum(indicator)]

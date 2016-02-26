@@ -3,6 +3,10 @@
 #' @param data The data which should be modeled
 #' @param xpar The covariates used in
 #' @param fpar the model
+#' @param numberOfParameters Should be omitted
+#' @param start Vector of length numberOfParamaters
+#' @param interval Interval if only one parameter
+#' @param ... Further arguments passed to optim (or optimize)
 #' @return The fitted parameters
 #' @export
 fitGpdFlex <-function (data, xpar, fpar, numberOfParameters, ...

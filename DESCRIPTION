@@ -1,7 +1,7 @@
 Package: potreg
 Type: Package
 Title: Regional Peaks-Over-Threshold Analysis
-Version: 0.1.0
+Version: 0.1.1
 Author: Martin Roth
 Maintainer: Martin Roth <roth@knmi.nl>
 Description: Implementation of the approach presented in Roth, M., T.A.

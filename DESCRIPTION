@@ -9,6 +9,9 @@ Description: Implementation of the approach presented in Roth, M., T.A.
     peaks-over-threshold model in a nonstationary climate. Water Resources Research,
     48, W11533.
 License: What license is it under?
+Depends:
+    data.table,
+    zoo
 LazyData: TRUE
 RoxygenNote: 5.0.1
 Suggests: knitr,

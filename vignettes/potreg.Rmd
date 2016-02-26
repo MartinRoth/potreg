@@ -9,11 +9,15 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-```{r, fig.show='hold'}
+```{r, fig.show='hold', include=FALSE}
 library(data.table)
 library(ggplot2)
 library(foreach)
 library(iterators)
+library(potreg)
+```
+
+```{r, fig.show='hold'}
 admNL <- raster::getData('GADM', country='NL', path="../inst/extdata", level=0)
 fadmNL <- fortify(admNL)
 if(!file.exists("../inst/extdata/NL_eobs_rr_0.50.rds")) {
@@ -22,8 +26,7 @@ if(!file.exists("../inst/extdata/NL_eobs_rr_0.50.rds")) {
 } else {
   data <- readRDS("../inst/extdata/NL_eobs_rr_0.50.rds")
 }
-data <- data[month %in% c(1,2,12),]
-data <- data[ !(year == 1950 & month %in% c(1,2)), ]
+data <- SubsetSeasons(data, "winter")
 
 knitr::kable(head(data))
 ```
@@ -33,7 +36,7 @@ ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
   geom_path() + coord_map() + 
   geom_tile(aes(x = lon, y = lat, fill = mRR, group = NULL), data = 
               data[, .(RR = max(rr)),
-                   by = .(year, lat, lon)][, .(mRR = mean(RR)),
+                   by = .(season, lat, lon)][, .(mRR = mean(RR)),
                                            by = .(lat, lon)],
             alpha = 0.5) + 
   scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
@@ -63,7 +66,7 @@ if(!file.exists("../inst/extdata/NL_eobs_threshold_0.50.rds")) {
   data[, pVal := -1]
   setkey(data, pointID)
   foreach(x=unique(data[["pointID"]]), .inorder=FALSE) %do% {
-    fit <- data[.(x), quantreg::rq(rrSep ~ year, tau = 0.96)]
+    fit <- data[.(x), quantreg::rq(rrSep ~ season, tau = 0.96)]
     data[.(x), threshold := fit$fitted.values]
     data[.(x), pVal := summary(fit)$coefficients[2, 4]]
   }
@@ -84,7 +87,7 @@ ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
 ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
   geom_path() + coord_map() + 
   geom_tile(aes(x = lon, y = lat, fill = trend, group = NULL),
-            data = data[, .(trend = diff(range(threshold))*10/diff(range(year))),
+            data = data[, .(trend = diff(range(threshold))*10/max(season)),
                         by = .(lat, lon)],
             alpha = 0.5) + 
   geom_point(aes(x=lon, y = lat, group=NULL),
@@ -102,15 +105,118 @@ data[excess <= 0, excess := NA]
 knitr::kable(head(data))
 ```
 
-We expect `r data[, length(unique(year)) - 1] * (1 - 0.96) * 90.25` exceedances per grid box. The actual sample size varies between `r min(data[!is.na(excess), .N, by = pointID][, N])` and `r max(data[!is.na(excess), .N, by = pointID][, N])` exceedances per grid box. In total we observe `r data[, any(!is.na(excess)), by = time][, length(which(V1))]` days with at least one exceedance.
+We expect `r data[, max(season)] * (1 - 0.96) * 90.25` exceedances per grid box. The actual sample size varies between `r min(data[!is.na(excess), .N, by = pointID][, N])` and `r max(data[!is.na(excess), .N, by = pointID][, N])` exceedances per grid box. In total we observe `r data[, any(!is.na(excess)), by = time][, length(which(V1))]` days with at least one exceedance.
 
 ```{r, fig.show='hold'}
-poissonData <- data[pointID == 1, .(time, year, excess)]
-poissonData[, countExcesses := cumsum(!is.na(excess))]
-ggplot(poissonData, aes(x = year, y = countExcesses)) + geom_line()
+poissonData <- data[pointID == 1, .(N = length(which(!is.na(excess))), year = min(year)), by = season]
+poissonData[, countExcesses := cumsum(N)]
+poissonData[, fitted := (sum(N) / .N) * (1 : .N) ]
+poissonData[, lower := qCondPoisProcess(0.025, 1 : .N, .N, sum(N))]
+poissonData[, upper := qCondPoisProcess(0.975, 1 : .N, .N, sum(N))]
+ggplot(poissonData, aes(x = year, y = countExcesses)) + geom_line() + 
+  geom_smooth(aes(y = fitted, ymin = lower, ymax = upper), stat = "identity") +
+  ylab("Cumulative number of excesses") + xlab("")
 ```
 
-- reproduce figures 2, 7, 8, 9, 10, 11
+### Switch to old/matrix format of the data
+```{r, fig.show='hold'}
+setkey(data, pointID, time)
+xpar <- list()
+xpar$S <- data[, length(unique(pointID))]
+xpar$T <- data[pointID == 1, .N]
+xpar$julian <- data[pointID == 1, as.numeric(julian(time, origin=as.Date("1950-01-01")))]
+xpar$threshold <- data[, threshold]
+dim(xpar$threshold) <- c(xpar$T, xpar$S)
+
+datMat <- data[, excess]
+dim(datMat) <- c(xpar$T, xpar$S)
+stopifnot(all(datMat[, 5] == data[pointID==5, excess], na.rm=TRUE))
+```
+
+```{r, fig.show='hold'}
+modelA <- function(p, xpar) {
+    scale <- p[1] * xpar$threshold
+    shape <- matrix(p[2], xpar$T, xpar$S)
+    list(scale = scale, shape = shape)
+}
+
+startA <- c(0.5, 0.0)
+
+A <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA,
+                numberOfParameters = 2, start = startA,  method = "BFGS",
+                control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
+```
+
+```{r, fig.show='hold'}
+modelAprime <- function(p, xpar) {
+    scale <- (p[1] + p[2] * (xpar$julian- mean(xpar$julian))) * xpar$threshold
+    shape <- matrix(p[3], xpar$T, xpar$S)
+    list(scale = scale, shape = shape)
+}
+
+startAprime <- c(0.5, 0, 0.05)
+
+Aprime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelAprime,
+                     numberOfParameters = 3, start = startAprime,
+                     method = "BFGS", control = list(maxit = 5000, ndeps = c(1e-03, 1e-7, 1e-05)))
+```
+
+```{r, fig.show='hold'}
+modelA2prime <- function(p, xpar) {
+    scale <- p[1] * xpar$threshold  
+    shape <- matrix(p[2] + p[3] * (xpar$julian - mean(xpar$julian)), xpar$T, xpar$S)
+    list(scale = scale, shape = shape)
+}
+
+startA2prime <- c(0.5, 0, 0)
+
+A2prime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA2prime,
+                      numberOfParameters = 3, start = startA2prime, method = "BFGS",
+                      control = list(maxit = 10000, ndeps = c(1e-03, 1e-4, 1e-6)))
+```
+
+```{r, fig.show='hold'}
+if(!file.exists("../inst/extdata/shapeEvolution20.rds")) {
+  shapeEvolution20 <- foreach(i = 1950 : 1995, .combine = "c") %dopar% { #1989
+    dataSmall <- data[year %in% (i:(i+20)), ]
+    xparSmall <- list()
+    xparSmall$S <- dataSmall[, length(unique(pointID))]
+    xparSmall$T <- dataSmall[pointID == 1, .N]
+    xparSmall$julian <- dataSmall[pointID == 1, as.numeric(julian(time, origin=as.Date("1950-01-01")))]
+    xparSmall$threshold <- dataSmall[, threshold]
+    dim(xparSmall$threshold) <- c(xparSmall$T, xparSmall$S)
+  
+    datMatSmall <- dataSmall[, excess]
+    dim(datMatSmall) <- c(xparSmall$T, xparSmall$S)
+    
+    fit <- fitGpdFlex(data = datMatSmall, xpar = xparSmall, fpar = modelA,
+                  numberOfParameters = 2, start = startA,  method = "BFGS",
+                  control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
+   
+    return(fit$shape[1])
+  }
+  saveRDS(shapeEvolution20, file = "../inst/extdata/shapeEvolution20.rds")
+} else {
+  shapeEvolution20 <- readRDS("../inst/extdata/shapeEvolution20.rds")
+}
+```
+
+```{r, fig.show='hold'}
+plotData <- data[pointID == 1, .(time, year) ]
+plotData[, A := A$shape[, 1]]
+plotData[, A2prime := A2prime$shape[, 1]]
+plotData <- plotData[, .(A = mean(A), A2prime = mean(A2prime)), by = year]
+plotData[, evolution20 := NA_real_]
+plotData[year %in% 1960 : 2005, evolution20 := shapeEvolution20]
+
+ggplot(plotData, aes(x = year, y = evolution20)) +
+  geom_point(col = 2) + geom_line(col = 2) +
+  geom_line(aes(y = A2prime), lty=2) +
+  geom_line(aes(y = A), lty = 3)
+
+```
+
+- reproduce figures 7, 8, 9, 10, 11
 - reproduce table 1 and 2
 
 Most computations are to be found in "Dropbox/Work/Rwork/Scriptfiles/0_computation.R"

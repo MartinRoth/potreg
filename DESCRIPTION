@@ -9,7 +9,7 @@ Description: Implementation of the approach presented in Roth, M., T.A.
     peaks-over-threshold model in a nonstationary climate. Water Resources Research,
     48, W11533.
 License: GPL (>= 2)
-Imports:
+Imports: 
     data.table,
     zoo
 LazyData: TRUE
@@ -22,5 +22,6 @@ Suggests: knitr,
     eobsR,
     evanHelpers,
     quantreg,
-    raster
+    raster,
+    testthat
 VignetteBuilder: knitr

@@ -144,7 +144,7 @@ modelA <- function(p, xpar) {
 
 startA <- c(0.5, 0.0)
 
-A <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA,
+A <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA, hessian = TRUE,
                 numberOfParameters = 2, start = startA,  method = "BFGS",
                 control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
 ```
@@ -158,7 +158,7 @@ modelAprime <- function(p, xpar) {
 
 startAprime <- c(0.5, 0, 0.05)
 
-Aprime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelAprime,
+Aprime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelAprime, hessian = TRUE,
                      numberOfParameters = 3, start = startAprime,
                      method = "BFGS", control = list(maxit = 5000, ndeps = c(1e-03, 1e-7, 1e-05)))
 ```
@@ -172,7 +172,7 @@ modelA2prime <- function(p, xpar) {
 
 startA2prime <- c(0.5, 0, 0)
 
-A2prime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA2prime,
+A2prime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA2prime, hessian = TRUE
                       numberOfParameters = 3, start = startA2prime, method = "BFGS",
                       control = list(maxit = 10000, ndeps = c(1e-03, 1e-4, 1e-6)))
 ```
@@ -216,6 +216,80 @@ ggplot(plotData, aes(x = year, y = evolution20)) +
   geom_line(aes(y = A2prime), lty=2) +
   geom_line(aes(y = A), lty = 3)
 
+```
+
+```{r, fig.show='hold'}
+# days with at least one event
+commonIndex <- data[, any(!is.na(excess)), by = time][, length(which(V1))]
+
+sensitivityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
+    result <- foreach(i = 1 : xpar$T) %do% {
+        local <- foreach(j = 1 : xpar$S) %do% {
+             scoreValue <- score(data, xpar, estimate, i, j)
+             return(t(scoreValue) %*% scoreValue)
+        }
+        local <- Reduce("+", local)
+        if(progress) progress(xpar$T, i)
+        return(local)
+    }
+    result <- Reduce("+", result)
+    return(result)
+} 
+
+variabilityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
+    result <- foreach(i = 1 : dim(data)[1]) %dopar% {
+        scoreValue <- score(data, xpar, estimate, i)
+        if(progress) progress(xpar$T, i)
+        return(t(scoreValue) %*% scoreValue)
+    }
+    tmp <- Reduce("+", result)
+    return(tmp)
+}
+
+scoreA <- function(data, xpar, estimate, time, space = "all") {
+    y <- data[time, ]
+    u <- xpar$threshold[time, ]
+
+    if (space != "all") {
+        y <- data[time, space]
+        u <- xpar$threshold[time, space]
+    }
+
+    if (all(is.na(y))) gradient <- matrix(c(0, 0), nrow = 1, ncol = 2)
+    else {
+        gamma <- estimate[1]
+        xi    <- estimate[2]
+
+        a <- gamma * u
+        b <- xi * y
+        c <- a + b
+        d <- xi * y / (u * gamma) + 1
+
+        dGamma <- - sum( 1 / gamma - (xi + 1) * y / (u * d * gamma^2), na.rm = TRUE)
+        dXi    <- - sum( (xi + 1) * y / (u * xi * d * gamma) - (xi + 1) * log(d) / xi^2 + log(d) / xi, na.rm = TRUE)
+
+        gradient <- matrix(c(dGamma, dXi), nrow = 1, ncol = 2)
+    }
+    colnames(gradient) <- c("gamma", "xi")
+    return(gradient)
+}
+
+progress <- function (n, i) {
+    step <- max(c(10, floor(n / 33)))
+    if (n >= 10) {
+        if (i%%step == 0) {
+            percentage <- round(i/n * 100, 1)
+            print(paste(percentage, "% done", sep = ""))
+        }
+    }
+}
+
+JA       <- variabilityMatrix(datMat, xpar, A$estimate, scoreA)
+HA       <- sensitivityMatrix(datMat, xpar, A$estimate, scoreA)
+GA       <- HA %*% solve(JA) %*% HA
+penaltyA <- sum(diag(HA %*% solve(GA)))
+TICA     <- A$deviance + 2 * penaltyA
+BICA     <- A$deviance + log(commonIndex) * penaltyA
 ```
 
 - reproduce figures 7, 8, 9, 10, 11

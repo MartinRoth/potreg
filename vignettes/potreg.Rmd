@@ -50,7 +50,7 @@ ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
 if(!file.exists("../inst/extdata/NL_eobs_rrSep_0.50.rds")) {
   julianDays <- as.numeric(data[pointID == 1, julian(time, origin=as.Date("1950-01-01"))])
   declusterData <- function(x) {
-    index <- evanHelpers::declusterSimpleSeparation(julianDays, x, sep=1)
+    index <- declusterSimpleSeparation(julianDays, x, sep=1)
     x[-index] <- 0
     return(x)
   }

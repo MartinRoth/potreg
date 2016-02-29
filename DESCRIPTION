@@ -8,8 +8,8 @@ Description: Implementation of the approach presented in Roth, M., T.A.
     Buishand, G. Jongbloed, and J.H. van Zanten (2012), A regional non-stationary
     peaks-over-threshold model in a nonstationary climate. Water Resources Research,
     48, W11533.
-License: GPL (>= 2)
-Imports: 
+License: BY-SA
+Imports:
     data.table,
     zoo
 LazyData: TRUE

@@ -45,6 +45,7 @@ fitGpdFlex <-function (data, xpar, fpar, numberOfParameters, ...
                 ,convergence = opt$convergence
                 ,counts = opt$counts
                 ,message = opt$message
+                ,threshold = gpd$threshold
                 ,scale = gpd$scale
                 ,shape = gpd$shape)
     cmat <- try(solve(opt$hessian), TRUE)
@@ -54,4 +55,69 @@ fitGpdFlex <-function (data, xpar, fpar, numberOfParameters, ...
     }
   }
   structure(c(out, call = call), class = "gpd")
+}
+
+#' Calculates the sensitivity matrix
+#' @inheritParams GetGodambeInformation
+#' @param progress
+#' @note Close to covariance matrix (from optim) - maybe to be exhanged
+#' @export
+sensitivityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
+  result <- foreach(i = 1 : xpar$T) %dopar% {
+    local <- foreach(j = 1 : xpar$S) %do% {
+      scoreValue <- score(data, xpar, estimate, i, j)
+      return(t(scoreValue) %*% scoreValue)
+    }
+    local <- Reduce("+", local)
+    if(progress) progress(xpar$T, i)
+    return(local)
+  }
+  result <- Reduce("+", result)
+  return(result)
+}
+
+#' Calculates the variability matrix
+#' @inheritParams sensitivityMatrix
+#' @export
+variabilityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
+  result <- foreach(i = 1 : dim(data)[1]) %dopar% {
+    scoreValue <- score(data, xpar, estimate, i)
+    if(progress) progress(xpar$T, i)
+    return(t(scoreValue) %*% scoreValue)
+  }
+  tmp <- Reduce("+", result)
+  return(tmp)
+}
+
+#' Simple process progess
+progress <- function (n, i) {
+  step <- max(c(10, floor(n / 33)))
+  if (n >= 10) {
+    if (i%%step == 0) {
+      percentage <- round(i/n * 100, 1)
+      print(paste(percentage, "% done", sep = ""))
+    }
+  }
+}
+
+#' Computes the Godambe information matrix
+#' @param data Data matrix
+#' @param xpar List Covariate information
+#' @param estimate Vector of the parameter estimates
+#' @param score Closure representing the score function
+#' @return List with \code{H} the sensitivity matrix, \code{J} the variability
+#' matrix, and \code{G} the Godambe information
+#' @export
+GetGodambeInformation <- function(data, xpar, estimate, score) {
+  J <- variabilityMatrix(data, xpar, estimate, score, FALSE)
+  H <- sensitivityMatrix(data, xpar, estimate, score, FALSE)
+  G <- H %*% solve(J) %*% H
+  list(J = J, H = H, G = G)
+}
+
+#' Calculates the modified penalty using the Godambe information matrix
+#' @param GodambeInformation e.g. the output from GetGodambeInformation
+#' @export
+GetGodambePenalty <- function(GodambeInformation) {
+  return(sum(diag(GodambeInformation$H %*% solve(GodambeInformation$G))))
 }

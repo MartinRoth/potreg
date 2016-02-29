@@ -23,5 +23,6 @@ Suggests: knitr,
     evanHelpers,
     quantreg,
     raster,
-    testthat
+    testthat,
+    evd
 VignetteBuilder: knitr

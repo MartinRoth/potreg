@@ -136,6 +136,7 @@ dim(datMat) <- c(xpar$T, xpar$S)
 stopifnot(all(datMat[, 5] == data[pointID==5, excess], na.rm=TRUE))
 ```
 
+### Model without trend in GPD parameters
 ```{r, fig.show='hold'}
 modelA <- function(p, xpar) {
     scale <- p[1] * xpar$threshold
@@ -150,6 +151,7 @@ A <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA, hessian = TRUE,
                 control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
 ```
 
+### Model with trend in GPD dispersion coefficient
 ```{r, fig.show='hold'}
 modelAprime <- function(p, xpar) {
     scale <- (p[1] + p[2] * (xpar$julian- mean(xpar$julian))) * xpar$threshold
@@ -164,6 +166,7 @@ Aprime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelAprime, hessian = T
                      method = "BFGS", control = list(maxit = 5000, ndeps = c(1e-03, 1e-7, 1e-05)))
 ```
 
+### Model with trend in GPD shape parameter
 ```{r, fig.show='hold'}
 modelA2prime <- function(p, xpar) {
     scale <- p[1] * xpar$threshold  
@@ -178,6 +181,7 @@ A2prime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA2prime, hessian =
                       control = list(maxit = 10000, ndeps = c(1e-03, 1e-4, 1e-6)))
 ```
 
+### Rolling window shape estimates 
 ```{r, fig.show='hold'}
 if(!file.exists("../inst/extdata/shapeEvolution20.rds")) {
   shapeEvolution20 <- foreach(i = 1950 : 1995, .combine = "c") %dopar% { #1989
@@ -204,6 +208,7 @@ if(!file.exists("../inst/extdata/shapeEvolution20.rds")) {
 }
 ```
 
+### Visualize trend in shape parameter
 ```{r, fig.show='hold'}
 plotData <- data[pointID == 1, .(time, year) ]
 plotData[, A := A$shape[, 1]]
@@ -320,6 +325,7 @@ if(!file.exists("../inst/extdata/GodambeInformation.rds")) {
 }
 ```
 
+### Model summary
 ```{r, fig.show='hold'}
 # days with at least one event
 commonIndex <- data[, any(!is.na(excess)), by = time][, length(which(V1))]
@@ -335,6 +341,7 @@ modelSummary[, BIC := deviance + log(commonIndex) * penalty]
 knitr::kable(modelSummary)
 ```
 
+### Trend in shape leads to different trends in return levels
 ```{r, fig.show='hold'}
 plotData <- data[pointID == 1, .(time, year) ]
 plotData[, threshold := A2prime$threshold[, 1]]
@@ -358,6 +365,7 @@ ggplot(retLevel, aes(x = year, y = level, col = period)) +
 
 ```
 
+### Difference between at site and Index flood approach
 ```{r, echo=FALSE}
 
 modelAsite <- function(p, xpar) {

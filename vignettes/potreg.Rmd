@@ -1,0 +1,437 @@
+---
+title: "Nonstationary Regional Frequency Analysis with Peaks-Over-Threshold Data"
+author: "Martin Roth"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, fig.show='hold', include=FALSE}
+library(data.table)
+library(ggplot2)
+library(foreach)
+library(iterators)
+library(potreg)
+library(evd)
+library(doParallel)
+registerDoParallel(2)
+```
+
+```{r, fig.show='hold'}
+admNL <- raster::getData('GADM', country='NL', path="../inst/extdata", level=0)
+fadmNL <- fortify(admNL)
+if(!file.exists("../inst/extdata/NL_eobs_rr_0.50.rds")) {
+  data  <- eobsR::importEOBS('rr', '1950/2015', admNL, "0.50reg")
+  saveRDS(data, file = "../inst/extdata/NL_eobs_rr_0.50.rds")
+} else {
+  data <- readRDS("../inst/extdata/NL_eobs_rr_0.50.rds")
+}
+data <- SubsetSeasons(data, "winter")
+
+knitr::kable(head(data))
+```
+
+```{r, fig.show='hold', fig.cap="Mean winter maxima per grid box."}
+ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
+  geom_path() + coord_map() + 
+  geom_tile(aes(x = lon, y = lat, fill = mRR, group = NULL), data = 
+              data[, .(RR = max(rr)),
+                   by = .(season, lat, lon)][, .(mRR = mean(RR)),
+                                           by = .(lat, lon)],
+            alpha = 0.5) + 
+  scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
+```
+
+### Decluster the data
+```{r, fig.show='hold'}
+if(!file.exists("../inst/extdata/NL_eobs_rrSep_0.50.rds")) {
+  julianDays <- as.numeric(data[pointID == 1, julian(time, origin=as.Date("1950-01-01"))])
+  declusterData <- function(x) {
+    index <- evanHelpers::declusterSimpleSeparation(julianDays, x, sep=1)
+    x[-index] <- 0
+    return(x)
+  }
+  data[, rrSep := declusterData(rr), by = pointID]
+  saveRDS(data, file = "../inst/extdata/NL_eobs_rrSep_0.50.rds")
+} else {
+  data <- readRDS("../inst/extdata/NL_eobs_rrSep_0.50.rds")
+}
+knitr::kable(head(data))
+```
+
+### Compute the threshold
+```{r, fig.show='hold'}
+if(!file.exists("../inst/extdata/NL_eobs_threshold_0.50.rds")) {
+  data[, threshold := -1]
+  data[, pVal := -1]
+  setkey(data, pointID)
+  foreach(x=unique(data[["pointID"]]), .inorder=FALSE) %do% {
+    fit <- data[.(x), quantreg::rq(rrSep ~ season, tau = 0.96)]
+    data[.(x), threshold := fit$fitted.values]
+    data[.(x), pVal := summary(fit)$coefficients[2, 4]]
+  }
+  saveRDS(data, file = "../inst/extdata/NL_eobs_threshold_0.50.rds")
+} else {
+  data <- readRDS("../inst/extdata/NL_eobs_threshold_0.50.rds")
+}
+knitr::kable(head(data))
+```
+
+```{r, fig.show='hold', fig.cap="Threshold statistics."}
+ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
+  geom_path() + coord_map() + 
+  geom_tile(aes(x = lon, y = lat, fill = mean, group = NULL), data = 
+              data[, .(mean = mean(threshold)), by = .(lat, lon)],
+            alpha = 0.5) + 
+  scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
+ggplot(fadmNL, aes(x = long, y = lat, group = group)) +
+  geom_path() + coord_map() + 
+  geom_tile(aes(x = lon, y = lat, fill = trend, group = NULL),
+            data = data[, .(trend = diff(range(threshold))*10/max(season)),
+                        by = .(lat, lon)],
+            alpha = 0.5) + 
+  geom_point(aes(x=lon, y = lat, group=NULL),
+             shape = 1,
+             data = data[, unique(pVal), by = .(lat, lon)][V1 < 0.05, ]) +
+  scale_fill_distiller(palette = "Spectral", guide =guide_legend(reverse=TRUE))
+```
+
+### Set excesses
+
+```{r, fig.show='hold'}
+data[, pVal := NULL]
+data[, excess := rrSep - threshold]
+data[excess <= 0, excess := NA]
+knitr::kable(head(data))
+```
+
+We expect `r data[, max(season)] * (1 - 0.96) * 90.25` exceedances per grid box. The actual sample size varies between `r min(data[!is.na(excess), .N, by = pointID][, N])` and `r max(data[!is.na(excess), .N, by = pointID][, N])` exceedances per grid box. In total we observe `r data[, any(!is.na(excess)), by = time][, length(which(V1))]` days with at least one exceedance.
+
+```{r, fig.show='hold'}
+poissonData <- data[pointID == 1, .(N = length(which(!is.na(excess))), year = min(year)), by = season]
+poissonData[, countExcesses := cumsum(N)]
+poissonData[, fitted := (sum(N) / .N) * (1 : .N) ]
+poissonData[, lower := qCondPoisProcess(0.025, 1 : .N, .N, sum(N))]
+poissonData[, upper := qCondPoisProcess(0.975, 1 : .N, .N, sum(N))]
+ggplot(poissonData, aes(x = year, y = countExcesses)) + geom_line() + 
+  geom_smooth(aes(y = fitted, ymin = lower, ymax = upper), stat = "identity") +
+  ylab("Cumulative number of excesses") + xlab("")
+```
+
+### Switch to old/matrix format of the data
+```{r, fig.show='hold'}
+setkey(data, pointID, time)
+xpar <- list()
+xpar$S <- data[, length(unique(pointID))]
+xpar$T <- data[pointID == 1, .N]
+xpar$julian <- data[pointID == 1, as.numeric(julian(time, origin=as.Date("1950-01-01")))]
+xpar$threshold <- data[, threshold]
+dim(xpar$threshold) <- c(xpar$T, xpar$S)
+
+datMat <- data[, excess]
+dim(datMat) <- c(xpar$T, xpar$S)
+stopifnot(all(datMat[, 5] == data[pointID==5, excess], na.rm=TRUE))
+```
+
+```{r, fig.show='hold'}
+modelA <- function(p, xpar) {
+    scale <- p[1] * xpar$threshold
+    shape <- matrix(p[2], xpar$T, xpar$S)
+    list(threshold = xpar$threshold, scale = scale, shape = shape)
+}
+
+startA <- c(0.5, 0.0)
+
+A <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA, hessian = TRUE,
+                numberOfParameters = 2, start = startA,  method = "BFGS",
+                control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
+```
+
+```{r, fig.show='hold'}
+modelAprime <- function(p, xpar) {
+    scale <- (p[1] + p[2] * (xpar$julian- mean(xpar$julian))) * xpar$threshold
+    shape <- matrix(p[3], xpar$T, xpar$S)
+    list(threshold = xpar$threshold, scale = scale, shape = shape)
+}
+
+startAprime <- c(0.5, 0, 0.05)
+
+Aprime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelAprime, hessian = TRUE,
+                     numberOfParameters = 3, start = startAprime,
+                     method = "BFGS", control = list(maxit = 5000, ndeps = c(1e-03, 1e-7, 1e-05)))
+```
+
+```{r, fig.show='hold'}
+modelA2prime <- function(p, xpar) {
+    scale <- p[1] * xpar$threshold  
+    shape <- matrix(p[2] + p[3] * (xpar$julian - mean(xpar$julian)), xpar$T, xpar$S)
+    list(threshold = xpar$threshold, scale = scale, shape = shape)
+}
+
+startA2prime <- c(0.5, 0, 0)
+
+A2prime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA2prime, hessian = TRUE,
+                      numberOfParameters = 3, start = startA2prime, method = "BFGS",
+                      control = list(maxit = 10000, ndeps = c(1e-03, 1e-4, 1e-6)))
+```
+
+```{r, fig.show='hold'}
+if(!file.exists("../inst/extdata/shapeEvolution20.rds")) {
+  shapeEvolution20 <- foreach(i = 1950 : 1995, .combine = "c") %dopar% { #1989
+    dataSmall <- data[year %in% (i:(i+20)), ]
+    xparSmall <- list()
+    xparSmall$S <- dataSmall[, length(unique(pointID))]
+    xparSmall$T <- dataSmall[pointID == 1, .N]
+    xparSmall$julian <- dataSmall[pointID == 1, as.numeric(julian(time, origin=as.Date("1950-01-01")))]
+    xparSmall$threshold <- dataSmall[, threshold]
+    dim(xparSmall$threshold) <- c(xparSmall$T, xparSmall$S)
+  
+    datMatSmall <- dataSmall[, excess]
+    dim(datMatSmall) <- c(xparSmall$T, xparSmall$S)
+    
+    fit <- fitGpdFlex(data = datMatSmall, xpar = xparSmall, fpar = modelA,
+                  numberOfParameters = 2, start = startA,  method = "BFGS",
+                  control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
+   
+    return(fit$shape[1])
+  }
+  saveRDS(shapeEvolution20, file = "../inst/extdata/shapeEvolution20.rds")
+} else {
+  shapeEvolution20 <- readRDS("../inst/extdata/shapeEvolution20.rds")
+}
+```
+
+```{r, fig.show='hold'}
+plotData <- data[pointID == 1, .(time, year) ]
+plotData[, A := A$shape[, 1]]
+plotData[, A2prime := A2prime$shape[, 1]]
+plotData <- plotData[, .(A = mean(A), A2prime = mean(A2prime)), by = year]
+plotData[, evolution20 := NA_real_]
+plotData[year %in% 1960 : 2005, evolution20 := shapeEvolution20]
+
+ggplot(plotData, aes(x = year, y = evolution20)) +
+  geom_point(col = 2) + geom_line(col = 2) +
+  geom_line(aes(y = A2prime), lty=2) +
+  geom_line(aes(y = A), lty = 3)
+
+```
+
+```{r, echo=FALSE}
+scoreA <- function(data, xpar, estimate, time, space = "all") {
+    y <- data[time, ]
+    u <- xpar$threshold[time, ]
+
+    if (space != "all") {
+        y <- data[time, space]
+        u <- xpar$threshold[time, space]
+    }
+
+    if (all(is.na(y))) gradient <- matrix(c(0, 0), nrow = 1, ncol = 2)
+    else {
+        gamma <- estimate[1]
+        xi    <- estimate[2]
+
+        a <- gamma * u
+        b <- xi * y
+        c <- a + b
+        d <- xi * y / (u * gamma) + 1
+
+        dGamma <- - sum( 1 / gamma - (xi + 1) * y / (u * d * gamma^2), na.rm = TRUE)
+        dXi    <- - sum( (xi + 1) * y / (u * xi * d * gamma) - (xi + 1) * log(d) / xi^2 + log(d) / xi, na.rm = TRUE)
+
+        gradient <- matrix(c(dGamma, dXi), nrow = 1, ncol = 2)
+    }
+    colnames(gradient) <- c("gamma", "xi")
+    return(gradient)
+}
+
+scoreAprime <- function(data, xpar, estimate, time, space = "all") {
+    y <- data[time, ]
+    u <- xpar$threshold[time, ]
+    if (space != "all") {
+        y <- data[time, space]
+        u <- xpar$threshold[time, space]
+    }
+    t <- xpar$julian[time]
+
+    if (all(is.na(y))) gradient <- matrix(c(0, 0, 0), nrow = 1, ncol = 3)
+    else {
+        gamma      <- estimate[1]
+        gammatrend <- estimate[2]
+        xi         <- estimate[3]
+    
+        a         <- t - mean(xpar$julian)
+        b         <- 1 + xi   
+        gammatrue <- gamma + a * gammatrend
+        c         <- xi * y / (gammatrue * u) + 1
+
+        dGamma      <- - sum( 1 / gammatrue - b * y  / (c * gammatrue^2 * u), na.rm = TRUE)
+        dGammatrend <- a * dGamma
+        dXi         <- - sum( - b * log(c) / xi^2 + log(c) / xi + b * y / (c * gammatrue * xi * u), na.rm = TRUE)
+
+        gradient <- matrix(c(dGamma, dGammatrend, dXi), nrow = 1, ncol = 3)
+    }
+    colnames(gradient) <- c("gamma", "gammatrend", "xi")
+    return(gradient)
+}
+
+scoreA2prime <- function(data, xpar, estimate, time, space = "all") {
+#   trend in shape but not in dispersion
+    y <- data[time, ]
+    u <- xpar$threshold[time, ]
+    if (space != "all") {
+        y <- data[time, space]
+        u <- xpar$threshold[time, space]
+    }
+    t <- xpar$julian[time]
+
+    if (all(is.na(y))) gradient <- matrix(c(0, 0, 0), nrow = 1, ncol = 3)
+    else {
+        gamma   <- estimate[1]
+        xi      <- estimate[2]
+        xitrend <- estimate[3]
+    
+        a      <- t - mean(xpar$julian) 
+        xitrue <- xi + xitrend * a
+        b      <- 1 + xitrue
+        c      <- xitrue * y / (u * gamma) + 1
+
+        dGamma   <- - sum(1 / gamma - y * b / ( u *gamma^2 * c), na.rm = TRUE)
+        dXi      <- - sum( b * y / ( u * xitrue * c * gamma) + log(c) / xitrue - b * log(c) / xitrue^2, na.rm = TRUE)
+        dXitrend <- a * dXi
+
+        gradient <- matrix(c(dGamma, dXi, dXitrend), nrow = 1, ncol = 3)
+    }
+    colnames(gradient) <- c("gamma", "xi", "xitrend")
+    return(gradient = gradient)#, a= a, xitrue = xitrue, b = b, c = c, u = u))
+}
+
+if(!file.exists("../inst/extdata/GodambeInformation.rds")) {
+  GodambeInformation <- list("A" = GetGodambeInformation(datMat, xpar, A$estimate, scoreA),
+                           "Aprime" = GetGodambeInformation(datMat, xpar, Aprime$estimate, scoreAprime),
+                           "A2prime" = GetGodambeInformation(datMat, xpar, A2prime$estimate, scoreA2prime))
+
+  saveRDS(GodambeInformation, file = "../inst/extdata/GodambeInformation.rds")
+} else {
+  GodambeInformation <- readRDS("../inst/extdata/GodambeInformation.rds")
+}
+```
+
+```{r, fig.show='hold'}
+# days with at least one event
+commonIndex <- data[, any(!is.na(excess)), by = time][, length(which(V1))]
+
+modelSummary <- data.table(model = c("A", "Aprime", "A2prime"),
+    deviance = c(A$deviance, Aprime$deviance, A2prime$deviance),
+    penalty  = c(GetGodambePenalty(GodambeInformation$A),
+                  GetGodambePenalty(GodambeInformation$Aprime),
+                  GetGodambePenalty(GodambeInformation$A2prime)))
+
+modelSummary[, TIC := deviance + 2 * penalty]
+modelSummary[, BIC := deviance + log(commonIndex) * penalty]
+knitr::kable(modelSummary)
+```
+
+```{r, fig.show='hold'}
+plotData <- data[pointID == 1, .(time, year) ]
+plotData[, threshold := A2prime$threshold[, 1]]
+plotData[, scale := A2prime$scale[, 1]]
+plotData[, shape := A2prime$shape[, 1]]
+plotData <- plotData[, .(threshold = mean(threshold),
+                         scale = mean(scale),
+                         shape = mean(shape)),
+                     by = year]
+
+retLevel <- data.table(year = rep(plotData[, year],3), 
+                       period = as.factor(c(rep(2, plotData[, .N]),
+                                  rep(5, plotData[, .N]),
+                                  rep(25, plotData[, .N]))),
+                       level = c(plotData[, qgpd(1 - 1/(2 * 3.61), threshold, scale, shape), by = year][, V1],
+                                 plotData[, qgpd(1 - 1/(5 * 3.61), threshold, scale, shape), by = year][, V1],
+                                 plotData[, qgpd(1 - 1/(25 * 3.61), threshold, scale, shape), by = year][, V1]))
+
+ggplot(retLevel, aes(x = year, y = level, col = period)) +
+  geom_line() + xlab("") + ylab("precipitation in mm") 
+
+```
+
+```{r, echo=FALSE}
+
+modelAsite <- function(p, xpar) {
+    scale <- p[1] * xpar$threshold[ , 6]
+    shape <- p[2]
+    list(threshold = xpar$threshold[, 6], scale = scale, shape = shape)
+}
+
+Asite <- fitGpdFlex(data = datMat[, 6], xpar = xpar, fpar = modelAsite, hessian = TRUE,
+                numberOfParameters = 2, start = startA,  method = "BFGS",
+                control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
+
+modelInfo <- data.table(model = "A",
+                        gamma = A$estimate[1],
+                        xi    = A$estimate[2],
+                        u     = mean(A$threshold[, 6]))
+
+modelInfo <- rbind(modelInfo, data.table(model = "atSite",
+                            gamma = Asite$estimate[1],
+                            xi    = Asite$estimate[2],
+                            u     = mean(Asite$threshold)))
+modelInfo[, scale := gamma * u]
+setkey(modelInfo, model)
+
+stdError <- list("A"           = GpdQuantileStdErr(2 : 100, 
+                               list(gamma=modelInfo["A", gamma], xi = modelInfo["A", xi]),
+                               u = modelInfo["A", u], 
+                               lambda = (1-0.96)*90.25,
+                               cov = solve(GodambeInformation$A$G)),
+                 "atSite"      = GpdQuantileStdErr(2 : 100, 
+                               list(gamma=modelInfo["atSite", gamma], xi = modelInfo["atSite", xi]),
+                               u = modelInfo["atSite", u], 
+                               lambda = (1-0.96)*90.25,
+                               cov = Asite$cov),
+                 "independent" = GpdQuantileStdErr(2 : 100,
+                               list(gamma=modelInfo["A", gamma], xi = modelInfo["A", xi]),
+                               u = modelInfo["A", u], 
+                               lambda = (1-0.96)*90.25,
+                               cov = solve(GodambeInformation$A$H)))
+
+retLevel <- data.table(model = rep(c("A", "atSite", "independent"), each = length(2 : 100)),
+                       period = rep(2 : 100, 3))
+setkey(retLevel, model)
+retLevel[, level := NA_real_]
+retLevel[, upper := NA_real_]
+retLevel[, lower := NA_real_]
+retLevel["A", level := qgpd(1 - 1/(period * 3.61),
+                                    modelInfo["A", u],
+                                    modelInfo["A", scale],
+                                    modelInfo["A", xi])]
+retLevel["atSite", level := qgpd(1 - 1/(period * 3.61),
+                                    modelInfo["atSite", u],
+                                    modelInfo["atSite", scale],
+                                    modelInfo["atSite", xi])]
+retLevel["independent", level := qgpd(1 - 1/(period * 3.61),
+                                    modelInfo["A", u],
+                                    modelInfo["A", scale],
+                                    modelInfo["A", xi])]
+retLevel["A", upper := level + 1.96 * stdError$A]
+retLevel["A", lower := level - 1.96 * stdError$A]
+retLevel["atSite", upper := level + 1.96 * stdError$atSite]
+retLevel["atSite", lower := level - 1.96 * stdError$atSite]
+retLevel["independent", upper := level + 1.96 * stdError$independent]
+retLevel["independent", lower := level - 1.96 * stdError$independent]
+```
+
+```{r, fig.show='hold', fig.cap="Uncertainty in return levels. We see a good overlap for at site (dashed blue) and IF return level (red) (this is however for the spatial center). The light blue 95% confidence band is based on one site, the grey band uses all sites and is computed using the Godambe information. Neglecting this leads to the dashed black lines."}
+ggplot(retLevel[model == "A"], aes(x = period, y = level, ymin = lower, ymax = upper)) +
+  geom_smooth(stat="identity", col = 2) + 
+  geom_smooth(stat="identity", data = retLevel["atSite"], lty = 2, fill = 4, alpha = 0.05) +
+  geom_line(aes(y = lower), data = retLevel["independent"], lty = 2, col = 1) +
+  geom_line(aes(y = upper), data = retLevel["independent"], lty = 2, col = 1) +
+  coord_trans(x = "log10") +
+  xlab("return period") + ylab("precipitation in mm")
+```
+
+

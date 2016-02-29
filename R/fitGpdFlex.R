@@ -59,7 +59,7 @@ fitGpdFlex <-function (data, xpar, fpar, numberOfParameters, ...
 
 #' Calculates the sensitivity matrix
 #' @inheritParams GetGodambeInformation
-#' @param progress
+#' @param progress Should progress print to screen
 #' @note Close to covariance matrix (from optim) - maybe to be exhanged
 #' @export
 sensitivityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
@@ -89,7 +89,7 @@ variabilityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
   return(tmp)
 }
 
-#' Simple process progess
+# Simple process progess
 progress <- function (n, i) {
   step <- max(c(10, floor(n / 33)))
   if (n >= 10) {

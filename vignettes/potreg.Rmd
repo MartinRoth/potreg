@@ -15,8 +15,9 @@ library(ggplot2)
 library(foreach)
 library(iterators)
 library(potreg)
+library(evd)
 library(doParallel)
-registerDoParallel(1)
+registerDoParallel(2)
 ```
 
 ```{r, fig.show='hold'}
@@ -139,7 +140,7 @@ stopifnot(all(datMat[, 5] == data[pointID==5, excess], na.rm=TRUE))
 modelA <- function(p, xpar) {
     scale <- p[1] * xpar$threshold
     shape <- matrix(p[2], xpar$T, xpar$S)
-    list(scale = scale, shape = shape)
+    list(threshold = xpar$threshold, scale = scale, shape = shape)
 }
 
 startA <- c(0.5, 0.0)
@@ -153,7 +154,7 @@ A <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA, hessian = TRUE,
 modelAprime <- function(p, xpar) {
     scale <- (p[1] + p[2] * (xpar$julian- mean(xpar$julian))) * xpar$threshold
     shape <- matrix(p[3], xpar$T, xpar$S)
-    list(scale = scale, shape = shape)
+    list(threshold = xpar$threshold, scale = scale, shape = shape)
 }
 
 startAprime <- c(0.5, 0, 0.05)
@@ -167,12 +168,12 @@ Aprime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelAprime, hessian = T
 modelA2prime <- function(p, xpar) {
     scale <- p[1] * xpar$threshold  
     shape <- matrix(p[2] + p[3] * (xpar$julian - mean(xpar$julian)), xpar$T, xpar$S)
-    list(scale = scale, shape = shape)
+    list(threshold = xpar$threshold, scale = scale, shape = shape)
 }
 
 startA2prime <- c(0.5, 0, 0)
 
-A2prime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA2prime, hessian = TRUE
+A2prime <- fitGpdFlex(data = datMat, xpar = xpar, fpar = modelA2prime, hessian = TRUE,
                       numberOfParameters = 3, start = startA2prime, method = "BFGS",
                       control = list(maxit = 10000, ndeps = c(1e-03, 1e-4, 1e-6)))
 ```
@@ -218,34 +219,7 @@ ggplot(plotData, aes(x = year, y = evolution20)) +
 
 ```
 
-```{r, fig.show='hold'}
-# days with at least one event
-commonIndex <- data[, any(!is.na(excess)), by = time][, length(which(V1))]
-
-sensitivityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
-    result <- foreach(i = 1 : xpar$T) %do% {
-        local <- foreach(j = 1 : xpar$S) %do% {
-             scoreValue <- score(data, xpar, estimate, i, j)
-             return(t(scoreValue) %*% scoreValue)
-        }
-        local <- Reduce("+", local)
-        if(progress) progress(xpar$T, i)
-        return(local)
-    }
-    result <- Reduce("+", result)
-    return(result)
-} 
-
-variabilityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
-    result <- foreach(i = 1 : dim(data)[1]) %dopar% {
-        scoreValue <- score(data, xpar, estimate, i)
-        if(progress) progress(xpar$T, i)
-        return(t(scoreValue) %*% scoreValue)
-    }
-    tmp <- Reduce("+", result)
-    return(tmp)
-}
-
+```{r, echo=FALSE}
 scoreA <- function(data, xpar, estimate, time, space = "all") {
     y <- data[time, ]
     u <- xpar$threshold[time, ]
@@ -274,77 +248,190 @@ scoreA <- function(data, xpar, estimate, time, space = "all") {
     return(gradient)
 }
 
-progress <- function (n, i) {
-    step <- max(c(10, floor(n / 33)))
-    if (n >= 10) {
-        if (i%%step == 0) {
-            percentage <- round(i/n * 100, 1)
-            print(paste(percentage, "% done", sep = ""))
-        }
+scoreAprime <- function(data, xpar, estimate, time, space = "all") {
+    y <- data[time, ]
+    u <- xpar$threshold[time, ]
+    if (space != "all") {
+        y <- data[time, space]
+        u <- xpar$threshold[time, space]
     }
+    t <- xpar$julian[time]
+
+    if (all(is.na(y))) gradient <- matrix(c(0, 0, 0), nrow = 1, ncol = 3)
+    else {
+        gamma      <- estimate[1]
+        gammatrend <- estimate[2]
+        xi         <- estimate[3]
+    
+        a         <- t - mean(xpar$julian)
+        b         <- 1 + xi   
+        gammatrue <- gamma + a * gammatrend
+        c         <- xi * y / (gammatrue * u) + 1
+
+        dGamma      <- - sum( 1 / gammatrue - b * y  / (c * gammatrue^2 * u), na.rm = TRUE)
+        dGammatrend <- a * dGamma
+        dXi         <- - sum( - b * log(c) / xi^2 + log(c) / xi + b * y / (c * gammatrue * xi * u), na.rm = TRUE)
+
+        gradient <- matrix(c(dGamma, dGammatrend, dXi), nrow = 1, ncol = 3)
+    }
+    colnames(gradient) <- c("gamma", "gammatrend", "xi")
+    return(gradient)
 }
 
-JA       <- variabilityMatrix(datMat, xpar, A$estimate, scoreA)
-HA       <- sensitivityMatrix(datMat, xpar, A$estimate, scoreA)
-GA       <- HA %*% solve(JA) %*% HA
-penaltyA <- sum(diag(HA %*% solve(GA)))
-TICA     <- A$deviance + 2 * penaltyA
-BICA     <- A$deviance + log(commonIndex) * penaltyA
+scoreA2prime <- function(data, xpar, estimate, time, space = "all") {
+#   trend in shape but not in dispersion
+    y <- data[time, ]
+    u <- xpar$threshold[time, ]
+    if (space != "all") {
+        y <- data[time, space]
+        u <- xpar$threshold[time, space]
+    }
+    t <- xpar$julian[time]
+
+    if (all(is.na(y))) gradient <- matrix(c(0, 0, 0), nrow = 1, ncol = 3)
+    else {
+        gamma   <- estimate[1]
+        xi      <- estimate[2]
+        xitrend <- estimate[3]
+    
+        a      <- t - mean(xpar$julian) 
+        xitrue <- xi + xitrend * a
+        b      <- 1 + xitrue
+        c      <- xitrue * y / (u * gamma) + 1
+
+        dGamma   <- - sum(1 / gamma - y * b / ( u *gamma^2 * c), na.rm = TRUE)
+        dXi      <- - sum( b * y / ( u * xitrue * c * gamma) + log(c) / xitrue - b * log(c) / xitrue^2, na.rm = TRUE)
+        dXitrend <- a * dXi
+
+        gradient <- matrix(c(dGamma, dXi, dXitrend), nrow = 1, ncol = 3)
+    }
+    colnames(gradient) <- c("gamma", "xi", "xitrend")
+    return(gradient = gradient)#, a= a, xitrue = xitrue, b = b, c = c, u = u))
+}
+
+if(!file.exists("../inst/extdata/GodambeInformation.rds")) {
+  GodambeInformation <- list("A" = GetGodambeInformation(datMat, xpar, A$estimate, scoreA),
+                           "Aprime" = GetGodambeInformation(datMat, xpar, Aprime$estimate, scoreAprime),
+                           "A2prime" = GetGodambeInformation(datMat, xpar, A2prime$estimate, scoreA2prime))
+
+  saveRDS(GodambeInformation, file = "../inst/extdata/GodambeInformation.rds")
+} else {
+  GodambeInformation <- readRDS("../inst/extdata/GodambeInformation.rds")
+}
 ```
-
-- reproduce figures 7, 8, 9, 10, 11
-- reproduce table 1 and 2
-
-Most computations are to be found in "Dropbox/Work/Rwork/Scriptfiles/0_computation.R"
-The corrections made after the review of the second paper are to be found in  "Dropbox/Work/Rwork/Scriptfiles/01_reviews.R"
-Go also carfully over the functions in "Dropbox/Work/Rwork/Scriptfiles/0_all_functions.R"
-
-
-
-Vignettes are long form documentation commonly included in packages. Because they are part of the distribution of the package, they need to be as compact as possible. The `html_vignette` output type provides a custom style sheet (and tweaks some options) to ensure that the resulting html is as small as possible. The `html_vignette` format:
-
-- Never uses retina figures
-- Has a smaller default figure size
-- Uses a custom CSS stylesheet instead of the default Twitter Bootstrap style
-
-## Vignette Info
-
-Note the various macros within the `vignette` section of the metadata block above. These are required in order to instruct R how to build the vignette. Note that you should change the `title` field and the `\VignetteIndexEntry` to match the title of your vignette.
-
-## Styles
-
-The `html_vignette` template includes a basic CSS theme. To override this theme you can specify your own CSS in the document metadata as follows:
-
-    output: 
-      rmarkdown::html_vignette:
-        css: mystyles.css
-
-## Figures
-
-The figure sizes have been customised so that you can easily put two images side-by-side. 
 
 ```{r, fig.show='hold'}
-plot(1:10)
-plot(10:1)
+# days with at least one event
+commonIndex <- data[, any(!is.na(excess)), by = time][, length(which(V1))]
+
+modelSummary <- data.table(model = c("A", "Aprime", "A2prime"),
+    deviance = c(A$deviance, Aprime$deviance, A2prime$deviance),
+    penalty  = c(GetGodambePenalty(GodambeInformation$A),
+                  GetGodambePenalty(GodambeInformation$Aprime),
+                  GetGodambePenalty(GodambeInformation$A2prime)))
+
+modelSummary[, TIC := deviance + 2 * penalty]
+modelSummary[, BIC := deviance + log(commonIndex) * penalty]
+knitr::kable(modelSummary)
 ```
 
-You can enable figure captions by `fig_caption: yes` in YAML:
+```{r, fig.show='hold'}
+plotData <- data[pointID == 1, .(time, year) ]
+plotData[, threshold := A2prime$threshold[, 1]]
+plotData[, scale := A2prime$scale[, 1]]
+plotData[, shape := A2prime$shape[, 1]]
+plotData <- plotData[, .(threshold = mean(threshold),
+                         scale = mean(scale),
+                         shape = mean(shape)),
+                     by = year]
 
-    output:
-      rmarkdown::html_vignette:
-        fig_caption: yes
+retLevel <- data.table(year = rep(plotData[, year],3), 
+                       period = as.factor(c(rep(2, plotData[, .N]),
+                                  rep(5, plotData[, .N]),
+                                  rep(25, plotData[, .N]))),
+                       level = c(plotData[, qgpd(1 - 1/(2 * 3.61), threshold, scale, shape), by = year][, V1],
+                                 plotData[, qgpd(1 - 1/(5 * 3.61), threshold, scale, shape), by = year][, V1],
+                                 plotData[, qgpd(1 - 1/(25 * 3.61), threshold, scale, shape), by = year][, V1]))
 
-Then you can use the chunk option `fig.cap = "Your figure caption."` in **knitr**.
+ggplot(retLevel, aes(x = year, y = level, col = period)) +
+  geom_line() + xlab("") + ylab("precipitation in mm") 
 
-## More Examples
-
-You can write math expressions, e.g. $Y = X\beta + \epsilon$, footnotes^[A footnote here.], and tables, e.g. using `knitr::kable()`.
-
-```{r, echo=FALSE, results='asis'}
-knitr::kable(head(mtcars, 10))
 ```
 
-Also a quote using `>`:
+```{r, echo=FALSE}
 
-> "He who gives up [code] safety for [code] speed deserves neither."
-([via](https://twitter.com/hadleywickham/status/504368538874703872))
+modelAsite <- function(p, xpar) {
+    scale <- p[1] * xpar$threshold[ , 6]
+    shape <- p[2]
+    list(threshold = xpar$threshold[, 6], scale = scale, shape = shape)
+}
+
+Asite <- fitGpdFlex(data = datMat[, 6], xpar = xpar, fpar = modelAsite, hessian = TRUE,
+                numberOfParameters = 2, start = startA,  method = "BFGS",
+                control = list(maxit = 5000, ndeps = c(1e-03, 1e-05)))
+
+modelInfo <- data.table(model = "A",
+                        gamma = A$estimate[1],
+                        xi    = A$estimate[2],
+                        u     = mean(A$threshold[, 6]))
+
+modelInfo <- rbind(modelInfo, data.table(model = "atSite",
+                            gamma = Asite$estimate[1],
+                            xi    = Asite$estimate[2],
+                            u     = mean(Asite$threshold)))
+modelInfo[, scale := gamma * u]
+setkey(modelInfo, model)
+
+stdError <- list("A"           = GpdQuantileStdErr(2 : 100, 
+                               list(gamma=modelInfo["A", gamma], xi = modelInfo["A", xi]),
+                               u = modelInfo["A", u], 
+                               lambda = (1-0.96)*90.25,
+                               cov = solve(GodambeInformation$A$G)),
+                 "atSite"      = GpdQuantileStdErr(2 : 100, 
+                               list(gamma=modelInfo["atSite", gamma], xi = modelInfo["atSite", xi]),
+                               u = modelInfo["atSite", u], 
+                               lambda = (1-0.96)*90.25,
+                               cov = Asite$cov),
+                 "independent" = GpdQuantileStdErr(2 : 100,
+                               list(gamma=modelInfo["A", gamma], xi = modelInfo["A", xi]),
+                               u = modelInfo["A", u], 
+                               lambda = (1-0.96)*90.25,
+                               cov = solve(GodambeInformation$A$H)))
+
+retLevel <- data.table(model = rep(c("A", "atSite", "independent"), each = length(2 : 100)),
+                       period = rep(2 : 100, 3))
+setkey(retLevel, model)
+retLevel[, level := NA_real_]
+retLevel[, upper := NA_real_]
+retLevel[, lower := NA_real_]
+retLevel["A", level := qgpd(1 - 1/(period * 3.61),
+                                    modelInfo["A", u],
+                                    modelInfo["A", scale],
+                                    modelInfo["A", xi])]
+retLevel["atSite", level := qgpd(1 - 1/(period * 3.61),
+                                    modelInfo["atSite", u],
+                                    modelInfo["atSite", scale],
+                                    modelInfo["atSite", xi])]
+retLevel["independent", level := qgpd(1 - 1/(period * 3.61),
+                                    modelInfo["A", u],
+                                    modelInfo["A", scale],
+                                    modelInfo["A", xi])]
+retLevel["A", upper := level + 1.96 * stdError$A]
+retLevel["A", lower := level - 1.96 * stdError$A]
+retLevel["atSite", upper := level + 1.96 * stdError$atSite]
+retLevel["atSite", lower := level - 1.96 * stdError$atSite]
+retLevel["independent", upper := level + 1.96 * stdError$independent]
+retLevel["independent", lower := level - 1.96 * stdError$independent]
+```
+
+```{r, fig.show='hold', fig.cap="Uncertainty in return levels. We see a good overlap for at site (dashed blue) and IF return level (red) (this is however for the spatial center). The light blue 95% confidence band is based on one site, the grey band uses all sites and is computed using the Godambe information. Neglecting this leads to the dashed black lines."}
+ggplot(retLevel[model == "A"], aes(x = period, y = level, ymin = lower, ymax = upper)) +
+  geom_smooth(stat="identity", col = 2) + 
+  geom_smooth(stat="identity", data = retLevel["atSite"], lty = 2, fill = 4, alpha = 0.05) +
+  geom_line(aes(y = lower), data = retLevel["independent"], lty = 2, col = 1) +
+  geom_line(aes(y = upper), data = retLevel["independent"], lty = 2, col = 1) +
+  coord_trans(x = "log10") +
+  xlab("return period") + ylab("precipitation in mm")
+```
+
+

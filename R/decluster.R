@@ -25,3 +25,14 @@ declusterSimpleSeparation <- function(time, x, sep) {
   }
   return(index[index!=0])
 }
+
+#' Decluster data
+#' @param jdays integer vector of julian days
+#' @param x numeric vector of corresponding values
+#' @param sep numeric separation time
+#' @export
+declusterData <- function(jdays, x, sep) {
+  index <- declusterSimpleSeparation(jdays, x, sep)
+  x[-index] <- 0
+  return(x)
+}

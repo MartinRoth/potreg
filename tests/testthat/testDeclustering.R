@@ -20,4 +20,6 @@ test_that("simple declustering output", {
   expect_equal(declusterSimpleSeparation(c(1,2,3,4), c(3,1,2,1), 2), 1)
   expect_equal(declusterSimpleSeparation(c(1,2,3,6,7,8,12,13),
                                          c(1,3,1,1,1,3,2,3),     2), c(2, 6, 8))
+  expect_equal(declusterData(c(1,2,3,6,7,8,12,13), c(1,3,1,1,1,3,2,3), 2),
+                                                   c(0,3,0,0,0,3,0,3))
 })

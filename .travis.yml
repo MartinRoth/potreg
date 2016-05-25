@@ -10,6 +10,9 @@ language: R
 sudo: false
 cache: packages
 
+r_binary_packages:
+  - ncdf4
+
 r_github_packages:
   - MartinRoth/eobsR
 

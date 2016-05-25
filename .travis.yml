@@ -14,6 +14,7 @@ addons:
   apt:
     packages:
       - netcdf-bin
+      - libnetcdf-dev
 
 r_binary_packages:
   - ncdf4

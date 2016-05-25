@@ -22,9 +22,9 @@ r_binary_packages:
 r_github_packages:
   - MartinRoth/eobsR
 
-env:
-  global:
-    - R_CHECK_ARGS="--no-build-vignettes"
+#env:
+#  global:
+#    - R_CHECK_ARGS="--no-build-vignettes"
 
 after_success:
   - Rscript -e 'covr::codecov()'

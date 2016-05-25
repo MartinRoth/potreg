@@ -25,5 +25,6 @@ Suggests: knitr,
     raster,
     testthat,
     evd,
-    mapproj
+    mapproj,
+    covr
 VignetteBuilder: knitr

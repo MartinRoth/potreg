@@ -8,6 +8,7 @@ SubsetSeasons <- function(dat, season) {
   stopifnot(is.data.table(dat))
   stopifnot(all(c("year", "month") %in% names(dat)))
   stopifnot(season %in% c("winter", "spring", "summer", "autumn"))
+  indicator <- NULL
   switch (season,
           winter = season <- c(12,  1,  2),
           spring = season <- c( 3,  4,  5),
@@ -17,7 +18,7 @@ SubsetSeasons <- function(dat, season) {
   newDat <- dat[month %in% season, ]
   setkey(newDat, year, month)
 
-  indexDat <- newDat[, .(month = unique(month)), by = year]
+  indexDat <- newDat[, list(month = unique(month)), by = year]
   setkey(indexDat, year, month)
 
   indexDat[, indicator := FALSE]

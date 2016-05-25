@@ -1,0 +1,30 @@
+# R for travis: see documentation at https://docs.travis-ci.com/user/languages/r
+
+# whitelist
+branches:
+  only:
+    - master
+    - develop
+
+language: R
+sudo: false
+cache: packages
+
+addons:
+  apt:
+    packages:
+      - netcdf-bin
+      - libnetcdf-dev
+
+r_binary_packages:
+  - ncdf4
+
+r_github_packages:
+  - MartinRoth/eobsR
+
+env:
+  global:
+    - R_CHECK_ARGS="--no-build-vignettes"
+
+after_success:
+  - Rscript -e 'covr::codecov()'

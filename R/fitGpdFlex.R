@@ -63,6 +63,7 @@ fitGpdFlex <-function (data, xpar, fpar, numberOfParameters, ...
 #' @note Close to covariance matrix (from optim) - maybe to be exhanged
 #' @export
 sensitivityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
+  i <- j <- NULL
   result <- foreach(i = 1 : xpar$T) %dopar% {
     local <- foreach(j = 1 : xpar$S) %do% {
       scoreValue <- score(data, xpar, estimate, i, j)
@@ -80,6 +81,7 @@ sensitivityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
 #' @inheritParams sensitivityMatrix
 #' @export
 variabilityMatrix <- function(data, xpar, estimate, score, progress = TRUE) {
+  i <- NULL
   result <- foreach(i = 1 : dim(data)[1]) %dopar% {
     scoreValue <- score(data, xpar, estimate, i)
     if(progress) progress(xpar$T, i)

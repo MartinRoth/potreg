@@ -11,13 +11,13 @@ Description: Implementation of the approach presented in Roth, M., T.A.
 License: GPL (>=2)
 Imports:
     data.table,
+    foreach,
     zoo
 LazyData: TRUE
 RoxygenNote: 5.0.1
 Suggests: knitr,
     rmarkdown,
     doParallel,
-    foreach,
     iterators,
     ggplot2,
     eobsR,

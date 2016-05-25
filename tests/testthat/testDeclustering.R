@@ -2,11 +2,11 @@ library(potreg)
 context("Input testing for declustering")
 
 test_that("correct input handling", {
-  expect_error(declusterSimpleSeparation("foo"), "time should be a numeric vector.")
-  expect_error(declusterSimpleSeparation(c(1,2,3), "foo"), "x should be a numeric vector.")
-  expect_error(declusterSimpleSeparation(c(1,2,3), c(2,3,1), "foo"), "sep should be a numeric.")
-  expect_error(declusterSimpleSeparation(c(1,2,3), c(2,3,1), c(1,2)), "sep should be a numeric.")
-  expect_error(declusterSimpleSeparation(c(1,2,3), c(2,3), 1), "time and x must have same length.")
+  expect_error(declusterSimpleSeparation("foo"), "time should be a numeric vector")
+  expect_error(declusterSimpleSeparation(c(1,2,3), "foo"), "x should be a numeric vector")
+  expect_error(declusterSimpleSeparation(c(1,2,3), c(2,3,1), "foo"), "sep should be a numeric")
+  expect_error(declusterSimpleSeparation(c(1,2,3), c(2,3,1), c(1,2)), "sep should be a numeric")
+  expect_error(declusterSimpleSeparation(c(1,2,3), c(2,3), 1), "time and x must have same length")
 })
 
 context("Output testing for declustering")

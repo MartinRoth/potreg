@@ -24,5 +24,6 @@ Suggests: knitr,
     quantreg,
     raster,
     testthat,
-    evd
+    evd,
+    mapproj
 VignetteBuilder: knitr
